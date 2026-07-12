@@ -22,26 +22,49 @@ app.get("/count", async (req, res) => {
     let browser;
     try {
         browser = await chromium.launch({ headless: true });
-        const page = await browser.newPage();
+        const page = await browser.newPage({
+            locale: "pt-BR",
+            extraHTTPHeaders: { "Accept-Language": "pt-BR,pt;q=0.9" }
+        });
 
         await page.goto(url, { waitUntil: "domcontentloaded", timeout: 30000 });
 
-        // Espera até 15s por qualquer heading que contenha "resultado"
-        const heading = page.getByRole("heading", { name: /resultado/i });
-        await heading.first().waitFor({ timeout: 15000 });
+        // Tenta aceitar cookies se aparecer o banner
+        try {
+            const cookieBtn = page.getByRole("button", { name: /allow all cookies|permitir todos os cookies|aceitar/i });
+            await cookieBtn.first().click({ timeout: 5000 });
+        } catch (e) {
+            // banner não apareceu, segue o jogo
+        }
+
+        // Espera até 20s por heading com "resultado" OU "result"
+        const heading = page.getByRole("heading", { name: /resultado|result/i });
+        await heading.first().waitFor({ timeout: 20000 });
 
         const text = await heading.first().innerText();
-        // Extrai o número de dentro do texto, ex: "~3 resultados" -> 3
         const match = text.match(/(\d+)/);
         const count = match ? parseInt(match[1], 10) : null;
 
-        res.json({
-            ok: true,
-            raw_text: text,
-            count: count
-        });
+        res.json({ ok: true, raw_text: text, count });
     } catch (err) {
-        res.status(500).json({ ok: false, error: err.message });
+        // MODO DIAGNÓSTICO: captura o que a página realmente mostrou
+        let pageText = null;
+        let pageTitle = null;
+        try {
+            const page = browser ? (await browser.contexts())[0]?.pages()[0] : null;
+            if (page) {
+                pageTitle = await page.title();
+                pageText = await page.locator("body").innerText();
+                pageText = pageText.substring(0, 1000); // limita o tamanho
+            }
+        } catch (e) {}
+
+        res.status(500).json({
+            ok: false,
+            error: err.message,
+            debug_title: pageTitle,
+            debug_body_preview: pageText
+        });
     } finally {
         if (browser) await browser.close();
     }
