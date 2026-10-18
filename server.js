@@ -42,8 +42,8 @@ app.get("/count", async (req, res) => {
         await heading.first().waitFor({ timeout: 20000 });
 
         const text = await heading.first().innerText();
-        const match = text.match(/(\d+)/);
-        const count = match ? parseInt(match[1], 10) : null;
+                const match = text.match(/([\d.,]+)/);
+        const count = match ? parseInt(match[1].replace(/[.,]/g, ""), 10) : null;
 
         res.json({ ok: true, raw_text: text, count });
     } catch (err) {
