@@ -4,8 +4,6 @@ const { chromium } = require("playwright");
 const app = express();
 const PORT = process.env.PORT || 3000;
 
-const normalizar = s => (s || "").toLowerCase().replace(/[^a-z0-9]/g, "");
-
 app.get("/", (req, res) => {
     res.send("OK");
 });
@@ -73,7 +71,7 @@ app.get("/count", async (req, res) => {
     }
 });
 
-// ===== /resolve (diagnóstico): busca o anunciante pelo nome, abre a página dele e procura view_all_page_id =====
+// ===== /resolve: busca o anunciante, abre a página do Facebook e lê o ID numérico da página =====
 app.get("/resolve", async (req, res) => {
     const q = (req.query.q || "").toString().trim().replace(/^@/, "");
     if (!q) return res.status(400).json({ ok: false, error: "parâmetro q é obrigatório" });
@@ -96,7 +94,7 @@ app.get("/resolve", async (req, res) => {
 
         await page.waitForTimeout(8000);
 
-        // procura um link de anunciante cujo texto bata com o nome/username
+        // acha o link do anunciante (nome ou @) na lista de anúncios
         const palavras = q.split(/[^a-zA-Z0-9]+/).filter(Boolean);
         const re = new RegExp(palavras.join("[\\s_.\\-]*"), "i");
         const link = page.locator("a").filter({ hasText: re }).first();
@@ -108,23 +106,38 @@ app.get("/resolve", async (req, res) => {
         const href = await link.getAttribute("href");
         const destino = new URL(href || "", "https://www.facebook.com").href;
 
+        // abre a página do Facebook do anunciante
         await page.goto(destino, { waitUntil: "domcontentloaded", timeout: 30000 });
         await page.waitForTimeout(6000);
 
-        const conteudo = await page.content();
-        const m = conteudo.match(/view_all_page_id=(\d+)/);
-        const links = await page.$$eval("a", as =>
-            as.map(a => a.href).filter(h => h && (h.includes("view_all_page_id") || h.includes("ads/library"))).slice(0, 10)
-        );
+        const html = await page.content();
+
+        // o ID numérico da página aparece em vários trechos do código da página
+        const padroes = {
+            pageID: /"pageID":"(\d+)"/,
+            page_id: /"page_id":"?(\d+)"?/,
+            entity_id: /"entity_id":"(\d+)"/,
+            view_all_page_id: /view_all_page_id=(\d+)/,
+            profile_php: /profile\.php\?id=(\d+)/
+        };
+
+        const achados = {};
+        for (const [nome, regex] of Object.entries(padroes)) {
+            const m = html.match(regex);
+            if (m) achados[nome] = m[1];
+        }
+
+        const ids = Object.values(achados);
+        const page_id = ids.length ? ids[0] : null;
 
         res.json({
             ok: true,
             q,
-            page_id: m ? m[1] : null,
-            status: m ? "encontrado" : "view_all_page_id não encontrado na página do anunciante",
+            page_id,
+            status: page_id ? "encontrado" : "nenhum ID encontrado na página",
+            achados,
             pagina_final: page.url(),
-            titulo: await page.title(),
-            links_relevantes: links
+            titulo: await page.title()
         });
     } catch (err) {
         res.status(500).json({ ok: false, error: err.message });
