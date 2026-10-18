@@ -70,7 +70,7 @@ app.get("/count", async (req, res) => {
     }
 });
 
-// ===== /resolve: descobre o page_id a partir do nome ou username =====
+// ===== /resolve: descobre o page_id a partir do nome ou username (com diagnóstico) =====
 app.get("/resolve", async (req, res) => {
     const q = (req.query.q || "").toString().trim();
     if (!q) return res.status(400).json({ ok: false, error: "parâmetro q é obrigatório" });
@@ -91,7 +91,19 @@ app.get("/resolve", async (req, res) => {
             await cookieBtn.first().click({ timeout: 5000 });
         } catch (e) {}
 
-        await page.waitForSelector('a[href*="view_all_page_id="]', { timeout: 15000 }).catch(() => {});
+        // dá tempo para o JavaScript da página montar os resultados
+        await page.waitForTimeout(8000);
+
+        const debug = await page.evaluate(() => {
+            const links = [...document.querySelectorAll("a")];
+            return {
+                title: document.title,
+                total_links: links.length,
+                links_com_page_id: links.filter(a => (a.href || "").includes("view_all_page_id")).length,
+                amostra_hrefs: links.map(a => a.href).filter(h => h && h.includes("ads/library")).slice(0, 5),
+                body_preview: document.body.innerText.substring(0, 600)
+            };
+        });
 
         const candidatos = await page.$$eval('a[href*="view_all_page_id="]', links => {
             const map = new Map();
@@ -107,7 +119,7 @@ app.get("/resolve", async (req, res) => {
             return [...map.values()];
         });
 
-        res.json({ ok: true, q, candidatos });
+        res.json({ ok: true, q, candidatos, debug });
     } catch (err) {
         res.status(500).json({ ok: false, error: err.message });
     } finally {
