@@ -1,5 +1,9 @@
 const express = require("express");
 const { chromium } = require("playwright");
+const { execFile } = require("child_process");
+const fs = require("fs");
+const os = require("os");
+const path = require("path");
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -70,16 +74,18 @@ app.get("/count", async (req, res) => {
     }
 });
 
-// ===== /perfil: lê o nome de exibição da página pública do Instagram pelo @ =====
+// ===== /perfil: tira print da página pública do Instagram e lê o texto com OCR (Tesseract) =====
 app.get("/perfil", async (req, res) => {
     const u = (req.query.u || "").toString().trim().replace(/^@/, "");
     if (!u) return res.status(400).json({ ok: false, error: "parâmetro u é obrigatório" });
 
     let browser;
+    const shotPath = path.join(os.tmpdir(), `perfil_${Date.now()}.png`);
     try {
         browser = await chromium.launch({ headless: true });
         const page = await browser.newPage({
             locale: "pt-BR",
+            viewport: { width: 1280, height: 900 },
             extraHTTPHeaders: { "Accept-Language": "pt-BR,pt;q=0.9" }
         });
 
@@ -87,24 +93,33 @@ app.get("/perfil", async (req, res) => {
             waitUntil: "domcontentloaded",
             timeout: 30000
         });
-        await page.waitForTimeout(3000);
+        await page.waitForTimeout(4000);
 
-        const meta = await page.evaluate(() => ({
-            og_title: document.querySelector('meta[property="og:title"]')?.content || null,
-            og_description: document.querySelector('meta[property="og:description"]')?.content || null,
-            description: document.querySelector('meta[name="description"]')?.content || null
-        }));
+        const og_title = await page.evaluate(() =>
+            document.querySelector('meta[property="og:title"]')?.content || null
+        );
+
+        await page.screenshot({ path: shotPath, fullPage: false });
+
+        const texto = await new Promise((resolve, reject) => {
+            execFile("tesseract", [shotPath, "stdout", "-l", "por+eng"], (err, stdout) =>
+                err ? reject(err) : resolve(stdout)
+            );
+        });
+
+        const linhas = texto.split("\n").map(s => s.trim()).filter(Boolean);
 
         res.json({
             ok: true,
             u,
-            title: await page.title(),
-            ...meta,
+            og_title,
+            ocr_linhas: linhas,
             pagina_final: page.url()
         });
     } catch (err) {
         res.status(500).json({ ok: false, error: err.message });
     } finally {
+        fs.unlink(shotPath, () => {});
         if (browser) await browser.close();
     }
 });
