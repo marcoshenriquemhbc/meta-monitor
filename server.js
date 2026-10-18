@@ -70,6 +70,51 @@ app.get("/count", async (req, res) => {
     }
 });
 
+// ===== /resolve: descobre o page_id a partir do nome ou username =====
+app.get("/resolve", async (req, res) => {
+    const q = (req.query.q || "").toString().trim();
+    if (!q) return res.status(400).json({ ok: false, error: "parâmetro q é obrigatório" });
+
+    const url = `https://www.facebook.com/ads/library/?active_status=all&ad_type=all&country=ALL&search_type=page&q=${encodeURIComponent(q)}`;
+    let browser;
+    try {
+        browser = await chromium.launch({ headless: true });
+        const page = await browser.newPage({
+            locale: "pt-BR",
+            extraHTTPHeaders: { "Accept-Language": "pt-BR,pt;q=0.9" }
+        });
+
+        await page.goto(url, { waitUntil: "domcontentloaded", timeout: 30000 });
+
+        try {
+            const cookieBtn = page.getByRole("button", { name: /allow all cookies|permitir todos os cookies|aceitar/i });
+            await cookieBtn.first().click({ timeout: 5000 });
+        } catch (e) {}
+
+        await page.waitForSelector('a[href*="view_all_page_id="]', { timeout: 15000 }).catch(() => {});
+
+        const candidatos = await page.$$eval('a[href*="view_all_page_id="]', links => {
+            const map = new Map();
+            for (const a of links) {
+                const m = a.href.match(/view_all_page_id=(\d+)/);
+                if (!m) continue;
+                const id = m[1];
+                const nome = (a.innerText || "").split("\n")[0].trim();
+                if (!map.has(id) || (!map.get(id).page_name && nome)) {
+                    map.set(id, { page_id: id, page_name: nome });
+                }
+            }
+            return [...map.values()];
+        });
+
+        res.json({ ok: true, q, candidatos });
+    } catch (err) {
+        res.status(500).json({ ok: false, error: err.message });
+    } finally {
+        if (browser) await browser.close();
+    }
+});
+
 app.listen(PORT, "0.0.0.0", () => {
     console.log(`Servidor iniciado na porta ${PORT}`);
 });
