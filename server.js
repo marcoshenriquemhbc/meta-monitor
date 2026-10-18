@@ -34,7 +34,6 @@ app.get("/count", async (req, res) => {
             await cookieBtn.first().click({ timeout: 5000 });
         } catch (e) {}
 
-        // Sem anúncios: a biblioteca mostra um aviso em vez do título de resultados
         await page.waitForTimeout(3000);
         const corpo = await page.locator("body").innerText();
         if (/Nenhum anúncio corresponde|não está veiculando/i.test(corpo)) {
@@ -71,12 +70,11 @@ app.get("/count", async (req, res) => {
     }
 });
 
-// ===== /resolve: busca o anunciante, abre a página do Facebook e lê o ID numérico da página =====
-app.get("/resolve", async (req, res) => {
-    const q = (req.query.q || "").toString().trim().replace(/^@/, "");
-    if (!q) return res.status(400).json({ ok: false, error: "parâmetro q é obrigatório" });
+// ===== /perfil: lê o nome de exibição da página pública do Instagram pelo @ =====
+app.get("/perfil", async (req, res) => {
+    const u = (req.query.u || "").toString().trim().replace(/^@/, "");
+    if (!u) return res.status(400).json({ ok: false, error: "parâmetro u é obrigatório" });
 
-    const url = `https://www.facebook.com/ads/library/?active_status=all&ad_type=all&country=ALL&media_type=all&q=${encodeURIComponent(q)}&search_type=keyword_unordered`;
     let browser;
     try {
         browser = await chromium.launch({ headless: true });
@@ -85,59 +83,24 @@ app.get("/resolve", async (req, res) => {
             extraHTTPHeaders: { "Accept-Language": "pt-BR,pt;q=0.9" }
         });
 
-        await page.goto(url, { waitUntil: "domcontentloaded", timeout: 30000 });
+        await page.goto(`https://www.instagram.com/${encodeURIComponent(u)}/`, {
+            waitUntil: "domcontentloaded",
+            timeout: 30000
+        });
+        await page.waitForTimeout(3000);
 
-        try {
-            const cookieBtn = page.getByRole("button", { name: /allow all cookies|permitir todos os cookies|aceitar/i });
-            await cookieBtn.first().click({ timeout: 5000 });
-        } catch (e) {}
-
-        await page.waitForTimeout(8000);
-
-        // acha o link do anunciante (nome ou @) na lista de anúncios
-        const palavras = q.split(/[^a-zA-Z0-9]+/).filter(Boolean);
-        const re = new RegExp(palavras.join("[\\s_.\\-]*"), "i");
-        const link = page.locator("a").filter({ hasText: re }).first();
-
-        if ((await link.count()) === 0) {
-            return res.json({ ok: true, q, page_id: null, status: "anunciante não apareceu na busca" });
-        }
-
-        const href = await link.getAttribute("href");
-        const destino = new URL(href || "", "https://www.facebook.com").href;
-
-        // abre a página do Facebook do anunciante
-        await page.goto(destino, { waitUntil: "domcontentloaded", timeout: 30000 });
-        await page.waitForTimeout(6000);
-
-        const html = await page.content();
-
-        // o ID numérico da página aparece em vários trechos do código da página
-        const padroes = {
-            pageID: /"pageID":"(\d+)"/,
-            page_id: /"page_id":"?(\d+)"?/,
-            entity_id: /"entity_id":"(\d+)"/,
-            view_all_page_id: /view_all_page_id=(\d+)/,
-            profile_php: /profile\.php\?id=(\d+)/
-        };
-
-        const achados = {};
-        for (const [nome, regex] of Object.entries(padroes)) {
-            const m = html.match(regex);
-            if (m) achados[nome] = m[1];
-        }
-
-        const ids = Object.values(achados);
-        const page_id = ids.length ? ids[0] : null;
+        const meta = await page.evaluate(() => ({
+            og_title: document.querySelector('meta[property="og:title"]')?.content || null,
+            og_description: document.querySelector('meta[property="og:description"]')?.content || null,
+            description: document.querySelector('meta[name="description"]')?.content || null
+        }));
 
         res.json({
             ok: true,
-            q,
-            page_id,
-            status: page_id ? "encontrado" : "nenhum ID encontrado na página",
-            achados,
-            pagina_final: page.url(),
-            titulo: await page.title()
+            u,
+            title: await page.title(),
+            ...meta,
+            pagina_final: page.url()
         });
     } catch (err) {
         res.status(500).json({ ok: false, error: err.message });
